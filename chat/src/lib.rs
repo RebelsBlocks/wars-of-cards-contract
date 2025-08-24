@@ -25,3 +25,31 @@ fn calculate_storage_cost(account_id: &AccountId, message: &String) -> NearToken
     // Return actual calculated cost
     NearToken::from_yoctonear(cost_with_margin)
 }
+
+// Message structure - using U128 for storage_paid to handle JSON serialization properly
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Debug)]
+pub struct Chatter {
+    pub account_id: AccountId,  // xyz.testnet lub hex
+    pub message: String,        // plain text
+    pub timestamp: U64,         // Block timestamp
+    pub storage_paid: U128,     // Storage cost in yoctoNEAR as string for JSON
+}
+
+// Define the contract structure
+#[near(contract_state)]
+pub struct Contract {
+    chatters: Vector<Chatter>,  // wszystkie wpisy
+    // Map of account_id -> deposited balance
+    storage_deposits: LookupMap<AccountId, NearToken>,
+    // Set of unique users who posted - dla count_chatter
+    unique_chatters: IterableSet<AccountId>,  // Changed: UnorderedSet -> IterableSet
+    // Total storage fees collected
+    total_storage_fees: NearToken,
+}
+
+impl Default for Contract {
+    fn default() -> Self {
+        panic!("Contract should be initialized before usage")
+    }
+}
