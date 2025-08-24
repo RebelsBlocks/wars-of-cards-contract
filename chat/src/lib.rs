@@ -254,3 +254,118 @@ impl Contract {
         self.unique_chatters.contains(&account_id)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use near_sdk::test_utils::{accounts, VMContextBuilder};
+    use near_sdk::{testing_env, VMContext};
+
+    fn get_context(predecessor_account_id: AccountId) -> VMContext {
+        VMContextBuilder::new()
+            .predecessor_account_id(predecessor_account_id)
+            .attached_deposit(NearToken::from_yoctonear(0))
+            .build()
+    }
+
+    #[test]
+    fn test_guestbook_flow() {
+        let mut context = get_context(accounts(0));
+        context.attached_deposit = NearToken::from_near(1); // 1 NEAR deposit
+        testing_env!(context);
+        
+        let mut contract = Contract::new();
+        
+        // Test deposit
+        contract.deposit_storage();
+        let balance = contract.get_storage_balance(accounts(0));
+        assert_eq!(balance.0, NearToken::from_near(1).as_yoctonear());
+        
+        // Test preview cost
+        let test_message = "Hello, this is my first message!".to_string();
+        let preview_cost = contract.preview_storage_cost(accounts(0), test_message.clone());
+        assert!(preview_cost.0 > 0); // Should have some cost
+        
+        // Test add message
+        contract.add_message_po_chatter(test_message.clone());
+        
+        // Check counters
+        assert_eq!(contract.total_messages(), U64(1));
+        assert_eq!(contract.count_chatter(), U64(1)); // one unique user
+        assert!(contract.is_chatter(accounts(0)));
+        
+        // Check messages
+        let messages = contract.get_messages(None);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].message, test_message);
+        assert_eq!(messages[0].account_id, accounts(0));
+        assert!(messages[0].timestamp.0 > 0); // Check timestamp exists
+        
+        // Verify storage cost was calculated and stored correctly
+        assert!(messages[0].storage_paid.0 > 0);
+    }
+
+    #[test]
+    fn test_multiple_users() {
+        let mut contract = Contract::new();
+        
+        // User 1 posts
+        let mut context = get_context(accounts(0));
+        context.attached_deposit = NearToken::from_near(1);
+        testing_env!(context);
+        contract.deposit_storage();
+        contract.add_message_po_chatter("Message from user 1".to_string());
+        
+        // User 2 posts
+        let mut context = get_context(accounts(1));
+        context.attached_deposit = NearToken::from_near(1);
+        testing_env!(context);
+        contract.deposit_storage();
+        contract.add_message_po_chatter("Message from user 2".to_string());
+        
+        // Check counters
+        assert_eq!(contract.total_messages(), U64(2));
+        assert_eq!(contract.count_chatter(), U64(2)); // two unique users
+        
+        // Check messages
+        let messages = contract.get_messages(None);
+        assert_eq!(messages.len(), 2);
+        // Newest first
+        assert_eq!(messages[0].message, "Message from user 2");
+        assert_eq!(messages[0].account_id, accounts(1));
+        assert_eq!(messages[1].message, "Message from user 1");
+        assert_eq!(messages[1].account_id, accounts(0));
+    }
+
+    #[test]
+    fn test_dynamic_storage_costs() {
+        let contract = Contract::new();
+        
+        // Test different message lengths should have different costs
+        let short_message = "Hi".to_string();
+        let long_message = "A".repeat(500); // 500 character message
+        
+        let short_cost = contract.preview_storage_cost(accounts(0), short_message);
+        let long_cost = contract.preview_storage_cost(accounts(0), long_message);
+        
+        // Long message should cost more than short message
+        assert!(long_cost.0 > short_cost.0);
+        
+        // Both should have some cost (real storage cost)
+        assert!(short_cost.0 > 0);
+        assert!(long_cost.0 > 0);
+    }
+    
+    #[test]
+    fn test_real_storage_cost_calculation() {
+        let contract = Contract::new();
+        
+        // Test that even tiny messages have real calculated cost (no artificial minimum)
+        let tiny_message = "x".to_string();
+        let cost = contract.preview_storage_cost(accounts(0), tiny_message);
+        
+        // Should be real calculated cost, not artificial minimum
+        assert!(cost.0 > 0);
+        assert!(cost.0 < NearToken::from_millinear(1).as_yoctonear()); // Should be less than 0.001 NEAR for tiny message
+    }
+}
