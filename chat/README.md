@@ -1,4 +1,4 @@
-# NEAR Chatter Contract
+# Wras Of Crads Chat Contract
 
 A smart contract for NEAR Protocol that allows users to leave messages in a public chat. Users pay for their own storage costs based on actual message size.
 
