@@ -1,0 +1,1754 @@
+{
+  "schema_version": "0.4.0",
+  "metadata": {
+    "name": "blackjack-contract",
+    "version": "0.1.0",
+    "authors": [
+      "Rebels Blocks"
+    ],
+    "build": {
+      "compiler": "rustc 1.86.0",
+      "builder": "cargo-near cargo-near-build 0.7.2"
+    },
+    "wasm_hash": "BzFJ8oUgkKXew2hizY8Tuvs4Mz8QsBqpwyTtPJhFkaQE"
+  },
+  "body": {
+    "functions": [
+      {
+        "name": "add_game_admin",
+        "doc": " Add game admin",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "account_id",
+              "type_schema": {
+                "$ref": "#/definitions/AccountId"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "advance_game_state",
+        "doc": " Advance game state (backend trigger)",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "table_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "new_state",
+              "type_schema": {
+                "$ref": "#/definitions/GameState"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "boolean"
+          }
+        }
+      },
+      {
+        "name": "assert_admin",
+        "doc": " Check if caller is admin (owner or game admin)",
+        "kind": "view"
+      },
+      {
+        "name": "assert_not_paused",
+        "doc": " Check if any operation should be blocked",
+        "kind": "view"
+      },
+      {
+        "name": "assert_owner",
+        "doc": " Check if caller is contract owner",
+        "kind": "view"
+      },
+      {
+        "name": "batch_burn_cards",
+        "doc": " Batch operation for gas efficiency",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "burns",
+              "type_schema": {
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "items": [
+                    {
+                      "$ref": "#/definitions/AccountId"
+                    },
+                    {
+                      "type": "integer",
+                      "format": "uint128",
+                      "minimum": 0.0
+                    }
+                  ],
+                  "maxItems": 2,
+                  "minItems": 2
+                }
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "array",
+            "items": {
+              "type": "boolean"
+            }
+          }
+        }
+      },
+      {
+        "name": "burn_cards",
+        "doc": " Burn cards (used for betting)",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "amount",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint128",
+                "minimum": 0.0
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "check_claim_eligibility",
+        "doc": " Check if user can claim cards (gas-free)",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "account_id",
+              "type_schema": {
+                "$ref": "#/definitions/AccountId"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/ClaimEligibility"
+          }
+        }
+      },
+      {
+        "name": "claim_daily_cards",
+        "doc": " Claim daily cards",
+        "kind": "call",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "integer",
+            "format": "uint128",
+            "minimum": 0.0
+          }
+        }
+      },
+      {
+        "name": "cleanup_round_signals",
+        "doc": " Auto-clear processed signals after round completion\n Called by backend after each round",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "table_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "round_number",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0.0
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "clear_all_pending_signals",
+        "doc": " Clear all pending signals (emergency cleanup)",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "table_id",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "clear_processed_signals",
+        "doc": " Clear processed signals (backend calls after processing)",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "table_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "bet_count",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint8",
+                "minimum": 0.0
+              }
+            },
+            {
+              "name": "move_count",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint8",
+                "minimum": 0.0
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "close_table",
+        "doc": " Close a game table (emergency)",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "table_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "reason",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "contract_source_metadata",
+        "kind": "view"
+      },
+      {
+        "name": "create_game_table",
+        "doc": " Create a new game table",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "table_id",
+              "type_schema": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "string"
+          }
+        }
+      },
+      {
+        "name": "distribute_winnings",
+        "doc": " Distribute winnings (admin/backend only)",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "distribution",
+              "type_schema": {
+                "$ref": "#/definitions/WinningsDistribution"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "boolean"
+          }
+        }
+      },
+      {
+        "name": "emergency_end_round_with_refunds",
+        "doc": " Force end round and refund all bets (emergency)",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "table_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "reason",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          }
+        }
+      },
+      {
+        "name": "find_available_table",
+        "doc": " Find available table with open seats",
+        "kind": "view",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/GameTableView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "generate_table_id",
+        "doc": " Generate unique table ID",
+        "kind": "call",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "string"
+          }
+        }
+      },
+      {
+        "name": "get_active_tables",
+        "doc": " Get all active tables",
+        "kind": "view",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/GameTableView"
+            }
+          }
+        }
+      },
+      {
+        "name": "get_balance",
+        "doc": " Get user card balance",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "account_id",
+              "type_schema": {
+                "$ref": "#/definitions/AccountId"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "integer",
+            "format": "uint128",
+            "minimum": 0.0
+          }
+        }
+      },
+      {
+        "name": "get_blackjack_stats",
+        "doc": " Get blackjack statistics",
+        "kind": "view",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/BlackjackStats"
+          }
+        }
+      },
+      {
+        "name": "get_config",
+        "doc": " Get contract configuration",
+        "kind": "view",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/ContractConfig"
+          }
+        }
+      },
+      {
+        "name": "get_contract_stats",
+        "doc": " Get contract statistics",
+        "kind": "view",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/ContractStats"
+          }
+        }
+      },
+      {
+        "name": "get_game_table",
+        "doc": " Get game table information",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "table_id",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/GameTableView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "get_pending_bets",
+        "doc": " Get pending bet signals (for backend polling)",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "table_id",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/BetSignal"
+            }
+          }
+        }
+      },
+      {
+        "name": "get_pending_moves",
+        "doc": " Get pending move signals (for backend polling)",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "table_id",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/MoveSignal"
+            }
+          }
+        }
+      },
+      {
+        "name": "get_purchase_tiers",
+        "doc": " Get purchase tiers",
+        "kind": "view",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/PurchaseTier"
+            }
+          }
+        }
+      },
+      {
+        "name": "get_single_table_id",
+        "doc": " Get single table ID (helper since you only have one table)",
+        "kind": "view",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      {
+        "name": "get_storage_cost_for_account",
+        "doc": " Get exact storage cost for a specific account",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "account_id",
+              "type_schema": {
+                "$ref": "#/definitions/AccountId"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "string"
+          }
+        }
+      },
+      {
+        "name": "get_tier_info",
+        "doc": " Get tier info by index (0-3)",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "tier_index",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint8",
+                "minimum": 0.0
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/PurchaseTier"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "get_user_stats",
+        "doc": " Get detailed user statistics",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "account_id",
+              "type_schema": {
+                "$ref": "#/definitions/AccountId"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/UserStats"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "get_valid_burn_amounts",
+        "doc": " Get valid burn amounts",
+        "kind": "view",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint128",
+              "minimum": 0.0
+            }
+          }
+        }
+      },
+      {
+        "name": "global_pause",
+        "doc": " Global pause for contract upgrades (owner only)",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "reason",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "global_resume",
+        "doc": " Resume operations after pause",
+        "kind": "call"
+      },
+      {
+        "name": "has_sufficient_balance",
+        "doc": " Check if user has sufficient token balance",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "account_id",
+              "type_schema": {
+                "$ref": "#/definitions/AccountId"
+              }
+            },
+            {
+              "name": "amount",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint128",
+                "minimum": 0.0
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "boolean"
+          }
+        }
+      },
+      {
+        "name": "join_game_table",
+        "doc": " Join a game table at specific seat",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "table_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "seat_number",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint8",
+                "minimum": 0.0
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "boolean"
+          }
+        }
+      },
+      {
+        "name": "kick_player_by_account",
+        "doc": " Kick specific player by account ID (admin only)\n For when player times out or needs to be removed",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "account_id",
+              "type_schema": {
+                "$ref": "#/definitions/AccountId"
+              }
+            },
+            {
+              "name": "reason",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "boolean"
+          }
+        }
+      },
+      {
+        "name": "leave_game_table",
+        "doc": " Leave a game table",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "table_id",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "boolean"
+          }
+        }
+      },
+      {
+        "name": "new",
+        "doc": " Initialize the contract",
+        "kind": "call",
+        "modifiers": [
+          "init"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "owner_id",
+              "type_schema": {
+                "$ref": "#/definitions/AccountId"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "place_bet",
+        "doc": " Place a bet (burns tokens)",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "table_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "amount",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint128",
+                "minimum": 0.0
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "boolean"
+          }
+        }
+      },
+      {
+        "name": "purchase_cards",
+        "doc": " Purchase cards with NEAR",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "tier_index",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint8",
+                "minimum": 0.0
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "integer",
+            "format": "uint128",
+            "minimum": 0.0
+          }
+        }
+      },
+      {
+        "name": "remove_game_admin",
+        "doc": " Remove game admin",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "account_id",
+              "type_schema": {
+                "$ref": "#/definitions/AccountId"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "signal_move",
+        "doc": " Signal a move (hit, stand, double, split)",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "table_id",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "move_type",
+              "type_schema": {
+                "$ref": "#/definitions/PlayerMove"
+              }
+            },
+            {
+              "name": "hand_index",
+              "type_schema": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint8",
+                "minimum": 0.0
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "boolean"
+          }
+        }
+      },
+      {
+        "name": "storage_balance_bounds",
+        "doc": " Get storage bounds",
+        "kind": "view",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/StorageBounds"
+          }
+        }
+      },
+      {
+        "name": "storage_balance_of",
+        "doc": " Get storage balance for account",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "account_id",
+              "type_schema": {
+                "$ref": "#/definitions/AccountId"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/StorageBalance"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "storage_deposit",
+        "doc": " Deposit storage for user account",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "account_id",
+              "type_schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/AccountId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/StorageBalance"
+          }
+        }
+      },
+      {
+        "name": "storage_withdraw",
+        "doc": " Withdraw unused storage deposit",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "amount",
+              "type_schema": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/StorageBalance"
+          }
+        }
+      },
+      {
+        "name": "update_config",
+        "doc": " Update contract configuration (Owner only)",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "update",
+              "type_schema": {
+                "$ref": "#/definitions/AdminConfigUpdate"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "update_game_config",
+        "doc": " Update game configuration",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "config",
+              "type_schema": {
+                "$ref": "#/definitions/GameConfig"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "root_schema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "String",
+      "type": "string",
+      "definitions": {
+        "AccountId": {
+          "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+          "type": "string"
+        },
+        "AdminConfigUpdate": {
+          "description": "Admin configuration update payload",
+          "type": "object",
+          "properties": {
+            "claim_interval": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "daily_claim_amount": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint128",
+              "minimum": 0.0
+            },
+            "purchase_rates": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PurchaseTier"
+              }
+            }
+          }
+        },
+        "BetSignal": {
+          "type": "object",
+          "required": [
+            "amount",
+            "player_account",
+            "seat_number",
+            "table_id",
+            "timestamp"
+          ],
+          "properties": {
+            "amount": {
+              "type": "integer",
+              "format": "uint128",
+              "minimum": 0.0
+            },
+            "player_account": {
+              "type": "string"
+            },
+            "seat_number": {
+              "type": "integer",
+              "format": "uint8",
+              "minimum": 0.0
+            },
+            "table_id": {
+              "type": "string"
+            },
+            "timestamp": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            }
+          }
+        },
+        "BlackjackStats": {
+          "type": "object",
+          "required": [
+            "active_tables",
+            "total_games_played",
+            "total_hands_dealt",
+            "total_players_joined",
+            "total_tokens_burned_betting",
+            "total_winnings_distributed"
+          ],
+          "properties": {
+            "active_tables": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "total_games_played": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "total_hands_dealt": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "total_players_joined": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "total_tokens_burned_betting": {
+              "type": "integer",
+              "format": "uint128",
+              "minimum": 0.0
+            },
+            "total_winnings_distributed": {
+              "type": "integer",
+              "format": "uint128",
+              "minimum": 0.0
+            }
+          }
+        },
+        "ClaimEligibility": {
+          "description": "Claim eligibility check (gas-free view function)",
+          "type": "object",
+          "required": [
+            "can_claim",
+            "claim_amount",
+            "current_balance",
+            "next_claim_time",
+            "reason",
+            "seconds_until_claim"
+          ],
+          "properties": {
+            "can_claim": {
+              "type": "boolean"
+            },
+            "claim_amount": {
+              "type": "integer",
+              "format": "uint128",
+              "minimum": 0.0
+            },
+            "current_balance": {
+              "type": "integer",
+              "format": "uint128",
+              "minimum": 0.0
+            },
+            "next_claim_time": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "reason": {
+              "type": "string"
+            },
+            "seconds_until_claim": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            }
+          }
+        },
+        "ContractConfig": {
+          "description": "Contract configuration",
+          "type": "object",
+          "required": [
+            "claim_interval",
+            "daily_claim_amount",
+            "purchase_rates",
+            "valid_burn_amounts"
+          ],
+          "properties": {
+            "claim_interval": {
+              "description": "Claim interval in nanoseconds (1 minute = 60_000_000_000)",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "daily_claim_amount": {
+              "description": "Daily claim amount (default: 1000)",
+              "type": "integer",
+              "format": "uint128",
+              "minimum": 0.0
+            },
+            "purchase_rates": {
+              "description": "Purchase rates (cards per NEAR)",
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/PurchaseTier"
+              }
+            },
+            "valid_burn_amounts": {
+              "description": "Valid burn amounts",
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "uint128",
+                "minimum": 0.0
+              }
+            }
+          }
+        },
+        "ContractStats": {
+          "description": "Contract statistics view",
+          "type": "object",
+          "required": [
+            "active_users",
+            "circulating_supply",
+            "total_burned",
+            "total_claimed",
+            "total_purchased",
+            "total_supply",
+            "total_users"
+          ],
+          "properties": {
+            "active_users": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "circulating_supply": {
+              "type": "integer",
+              "format": "uint128",
+              "minimum": 0.0
+            },
+            "total_burned": {
+              "type": "integer",
+              "format": "uint128",
+              "minimum": 0.0
+            },
+            "total_claimed": {
+              "type": "integer",
+              "format": "uint128",
+              "minimum": 0.0
+            },
+            "total_purchased": {
+              "type": "integer",
+              "format": "uint128",
+              "minimum": 0.0
+            },
+            "total_supply": {
+              "type": "integer",
+              "format": "uint128",
+              "minimum": 0.0
+            },
+            "total_users": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            }
+          }
+        },
+        "GameConfig": {
+          "type": "object",
+          "required": [
+            "auto_start_delay_ms",
+            "betting_timeout_ms",
+            "max_bet_amount",
+            "max_inactive_time_ms",
+            "min_bet_amount",
+            "move_timeout_ms",
+            "round_break_ms"
+          ],
+          "properties": {
+            "auto_start_delay_ms": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "betting_timeout_ms": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "max_bet_amount": {
+              "type": "integer",
+              "format": "uint128",
+              "minimum": 0.0
+            },
+            "max_inactive_time_ms": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "max_players": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint8",
+              "minimum": 0.0
+            },
+            "min_bet_amount": {
+              "type": "integer",
+              "format": "uint128",
+              "minimum": 0.0
+            },
+            "move_timeout_ms": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "round_break_ms": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            }
+          }
+        },
+        "GameState": {
+          "type": "string",
+          "enum": [
+            "WaitingForPlayers",
+            "Betting",
+            "DealingInitialCards",
+            "PlayerTurn",
+            "DealerTurn",
+            "RoundEnded"
+          ]
+        },
+        "GameTableView": {
+          "type": "object",
+          "required": [
+            "available_seats",
+            "id",
+            "is_active",
+            "max_bet",
+            "min_bet",
+            "players",
+            "round_number",
+            "state"
+          ],
+          "properties": {
+            "available_seats": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "uint8",
+                "minimum": 0.0
+              }
+            },
+            "betting_deadline": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "current_player_index": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint8",
+              "minimum": 0.0
+            },
+            "id": {
+              "type": "string"
+            },
+            "is_active": {
+              "type": "boolean"
+            },
+            "max_bet": {
+              "type": "integer",
+              "format": "uint128",
+              "minimum": 0.0
+            },
+            "min_bet": {
+              "type": "integer",
+              "format": "uint128",
+              "minimum": 0.0
+            },
+            "move_deadline": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "players": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/PlayerView"
+              }
+            },
+            "round_number": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "state": {
+              "$ref": "#/definitions/GameState"
+            }
+          }
+        },
+        "HandResult": {
+          "type": "string",
+          "enum": [
+            "Blackjack",
+            "Win",
+            "Push",
+            "Bust",
+            "Lose"
+          ]
+        },
+        "MoveSignal": {
+          "type": "object",
+          "required": [
+            "move_type",
+            "player_account",
+            "table_id",
+            "timestamp"
+          ],
+          "properties": {
+            "hand_index": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint8",
+              "minimum": 0.0
+            },
+            "move_type": {
+              "$ref": "#/definitions/PlayerMove"
+            },
+            "player_account": {
+              "type": "string"
+            },
+            "table_id": {
+              "type": "string"
+            },
+            "timestamp": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            }
+          }
+        },
+        "PlayerMove": {
+          "type": "string",
+          "enum": [
+            "Hit",
+            "Stand",
+            "Double",
+            "Split"
+          ]
+        },
+        "PlayerState": {
+          "type": "string",
+          "enum": [
+            "WaitingForNextRound",
+            "Active",
+            "SittingOut",
+            "Observing",
+            "AwaitingBuyIn"
+          ]
+        },
+        "PlayerView": {
+          "type": "object",
+          "required": [
+            "account_id",
+            "burned_tokens",
+            "is_current_player",
+            "seat_number",
+            "state",
+            "time_since_last_action"
+          ],
+          "properties": {
+            "account_id": {
+              "type": "string"
+            },
+            "burned_tokens": {
+              "type": "integer",
+              "format": "uint128",
+              "minimum": 0.0
+            },
+            "is_current_player": {
+              "type": "boolean"
+            },
+            "pending_move": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PlayerMove"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "seat_number": {
+              "type": "integer",
+              "format": "uint8",
+              "minimum": 0.0
+            },
+            "state": {
+              "$ref": "#/definitions/PlayerState"
+            },
+            "time_since_last_action": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            }
+          }
+        },
+        "PlayerWinning": {
+          "type": "object",
+          "required": [
+            "account_id",
+            "bet_amount",
+            "hand_index",
+            "result",
+            "seat_number",
+            "winnings"
+          ],
+          "properties": {
+            "account_id": {
+              "type": "string"
+            },
+            "bet_amount": {
+              "type": "integer",
+              "format": "uint128",
+              "minimum": 0.0
+            },
+            "hand_index": {
+              "type": "integer",
+              "format": "uint8",
+              "minimum": 0.0
+            },
+            "result": {
+              "$ref": "#/definitions/HandResult"
+            },
+            "seat_number": {
+              "type": "integer",
+              "format": "uint8",
+              "minimum": 0.0
+            },
+            "winnings": {
+              "type": "integer",
+              "format": "uint128",
+              "minimum": 0.0
+            }
+          }
+        },
+        "PurchaseTier": {
+          "description": "Purchase tier definition",
+          "type": "object",
+          "required": [
+            "cards_amount",
+            "name",
+            "near_cost"
+          ],
+          "properties": {
+            "cards_amount": {
+              "description": "Cards received for this payment",
+              "type": "integer",
+              "format": "uint128",
+              "minimum": 0.0
+            },
+            "name": {
+              "description": "Display name for this tier",
+              "type": "string"
+            },
+            "near_cost": {
+              "description": "Amount of NEAR required",
+              "type": "string"
+            }
+          }
+        },
+        "StorageBalance": {
+          "description": "Storage management structure",
+          "type": "object",
+          "required": [
+            "available",
+            "total"
+          ],
+          "properties": {
+            "available": {
+              "type": "string"
+            },
+            "total": {
+              "type": "string"
+            }
+          }
+        },
+        "StorageBounds": {
+          "description": "Storage deposit bounds",
+          "type": "object",
+          "required": [
+            "min"
+          ],
+          "properties": {
+            "max": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "min": {
+              "type": "string"
+            }
+          }
+        },
+        "UserStats": {
+          "description": "User statistics view",
+          "type": "object",
+          "required": [
+            "balance",
+            "can_claim_now",
+            "last_claim_time",
+            "next_claim_available",
+            "registered_at",
+            "storage_available",
+            "storage_deposit_amount",
+            "storage_deposited",
+            "storage_used",
+            "total_burned",
+            "total_claimed",
+            "total_purchased"
+          ],
+          "properties": {
+            "balance": {
+              "type": "integer",
+              "format": "uint128",
+              "minimum": 0.0
+            },
+            "can_claim_now": {
+              "type": "boolean"
+            },
+            "last_claim_time": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "next_claim_available": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "registered_at": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "storage_available": {
+              "type": "integer",
+              "format": "uint128",
+              "minimum": 0.0
+            },
+            "storage_deposit_amount": {
+              "type": "string"
+            },
+            "storage_deposited": {
+              "type": "boolean"
+            },
+            "storage_used": {
+              "type": "integer",
+              "format": "uint128",
+              "minimum": 0.0
+            },
+            "total_burned": {
+              "type": "integer",
+              "format": "uint128",
+              "minimum": 0.0
+            },
+            "total_claimed": {
+              "type": "integer",
+              "format": "uint128",
+              "minimum": 0.0
+            },
+            "total_purchased": {
+              "type": "integer",
+              "format": "uint128",
+              "minimum": 0.0
+            }
+          }
+        },
+        "WinningsDistribution": {
+          "type": "object",
+          "required": [
+            "distributions",
+            "round_number",
+            "table_id",
+            "timestamp",
+            "total_minted"
+          ],
+          "properties": {
+            "distributions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/PlayerWinning"
+              }
+            },
+            "round_number": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "table_id": {
+              "type": "string"
+            },
+            "timestamp": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "total_minted": {
+              "type": "integer",
+              "format": "uint128",
+              "minimum": 0.0
+            }
+          }
+        }
+      }
+    }
+  }
+}
