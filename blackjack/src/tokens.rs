@@ -247,7 +247,7 @@ impl Default for ContractConfig {
     fn default() -> Self {
         Self {
             daily_claim_amount: 1000,
-            claim_interval: MINUTE_IN_NS, // 1 minute for dev/testnet, change to DAY_IN_NS for mainnet
+            claim_interval: MINUTE_IN_NS, 
             purchase_rates: vec![
                 PurchaseTier {
                     near_cost: NearToken::from_near(1),
@@ -386,11 +386,6 @@ pub fn storage_balance_bounds(_contract: &CardsContract) -> StorageBounds {
     }
 }
 
-/// Get exact storage cost for a specific account
-pub fn get_storage_cost_for_account(_contract: &CardsContract, account_id: &AccountId) -> NearToken {
-    use crate::storage::calculate_user_storage_cost;
-    calculate_user_storage_cost(account_id)
-}
 
 /// Claim daily cards
 pub fn claim_daily_cards(contract: &mut CardsContract) -> u128 {
@@ -691,7 +686,9 @@ pub fn get_config(contract: &CardsContract) -> &ContractConfig {
 
 /// Update contract configuration (Owner only)
 pub fn update_config(contract: &mut CardsContract, update: AdminConfigUpdate) {
-    contract.assert_owner();
+    // Check if caller is contract owner
+    let caller = env::predecessor_account_id();
+    require!(caller == contract.owner_id, "Only contract owner can call this method");
     
     let timestamp = env::block_timestamp();
     
