@@ -1,68 +1,23 @@
-use near_sdk::{env, log, require};
-use crate::CardsContract;
+use near_sdk::{env, log, require, AccountId};
+use crate::{CardsContract, events::emit_event};
 use super::types::*;
 
 // ========================================
-// BET PLACEMENT (Token Burning)
+// HELPER FUNCTIONS
 // ========================================
 
-/// Place a bet by burning tokens
-pub fn place_bet(contract: &mut CardsContract, table_id: String, amount: u128) -> bool {
-    let player_account = env::predecessor_account_id();
-    let timestamp = env::block_timestamp();
-
-    // 1. Early validation to save gas
-    require!(
-        contract.config.valid_burn_amounts.contains(&amount),
-        "Invalid bet amount"
-    );
-
-    require!(
-        contract.has_sufficient_balance(&player_account, amount),
-        "Insufficient token balance"
-    );
-
-    // 2. Validate table exists and is in betting state
-    let mut table = match contract.game_tables.get(&table_id) {
-        Some(t) => t,
-        None => {
-            log!("Table {} not found", table_id);
-            return false;
-        }
-    };
-
-    require!(table.state == GameState::Betting, "Table not in betting state");
-    require!(table.is_active, "Table is not active");
-
-    // 3. Find player at table
-    let player_index = table.players.iter().position(|p| p.account_id == player_account);
-    let player_index = match player_index {
-        Some(idx) => idx,
-        None => {
-            log!("Player {} not found at table {}", player_account, table_id);
-            return false;
-        }
-    };
-
-    let player = &mut table.players[player_index];
-
-    // 4. Validate bet
-    require!(player.state == PlayerState::Active, "Player not active");
-    require!(player.burned_tokens == 0, "Player already placed bet");
-    require!(amount >= table.min_bet, "Bet below minimum");
-    require!(amount <= table.max_bet, "Bet above maximum");
-
-    // CRITICAL FIX: Burn tokens FIRST (state change before external effects)
-    let mut user_account = contract.accounts.get(&player_account)
+/// Burn tokens for a player (helper function)
+fn burn_tokens_for_player(contract: &mut CardsContract, player_account: &AccountId, amount: u128) {
+    // Burn tokens from user account
+    let mut user_account = contract.accounts.get(player_account)
         .expect("User account not found");
     
-    // Use checked arithmetic for safety
     user_account.balance = user_account.balance.checked_sub(amount)
-        .expect("Insufficient balance for bet");
+        .expect("Insufficient balance for burn");
     user_account.total_burned = user_account.total_burned.checked_add(amount)
         .expect("Total burned overflow");
         
-    contract.accounts.insert(&player_account, &user_account);
+    contract.accounts.insert(player_account, &user_account);
 
     // Update contract stats
     contract.total_supply = contract.total_supply.checked_sub(amount)
@@ -71,192 +26,269 @@ pub fn place_bet(contract: &mut CardsContract, table_id: String, amount: u128) -
         .expect("Total cards burned overflow");
     contract.blackjack_stats.total_tokens_burned_betting = 
         contract.blackjack_stats.total_tokens_burned_betting.checked_add(amount)
-        .expect("Blackjack tokens burned overflow");
+            .expect("Betting burn stats overflow");
+}
 
-    // Store seat number before updating player state
-    let seat_number = player.seat_number;
+// ========================================
+// SEAT-BASED BETTING AND MOVES
+// ========================================
 
-    // Update player state
-    player.burned_tokens = amount;
-    player.total_burned_this_session = player.total_burned_this_session.checked_add(amount)
-        .expect("Session burned overflow");
-    player.last_action_time = timestamp;
+/// Place a bet by burning tokens (pure seat-based)
+pub fn place_bet(contract: &mut CardsContract, amount: u128) -> bool {
+    let player_account = env::predecessor_account_id();
+    let timestamp = env::block_timestamp();
 
-    // Create bet signal for backend processing
-    let bet_signal = BetSignal {
-        player_account: player_account.clone(),
-        table_id: table_id.clone(),
-        amount,
-        timestamp,
-        seat_number,
+    // 1. Validate bet amount
+    require!(
+        contract.config.valid_burn_amounts.contains(&amount),
+        "Invalid bet amount"
+    );
+
+    require!(
+        crate::tokens::get_balance(contract, &player_account) >= amount,
+        "Insufficient token balance"
+    );
+
+    // 2. Find player's seat
+    let seat_number = match crate::game::player::is_player_seated(contract, &player_account) {
+        Some(seat) => seat,
+        None => {
+            log!("Player {} not seated", player_account);
+            return false;
+        }
     };
 
-    // Add to pending bets
-    let mut pending_bets = contract.pending_bets.get(&table_id).unwrap_or_default();
+    // 3. Validate game state
+    require!(contract.game_state == GameState::Betting, "Game not in betting state");
+
+    // 4. Get and validate player
+    let mut player = match contract.seats.get(&seat_number) {
+        Some(Some(p)) => p,
+        _ => {
+            log!("Player not found at seat {}", seat_number);
+            return false;
+        }
+    };
+
+    require!(player.state == PlayerState::Active, "Player not active");
+    require!(player.total_burned_this_round == 0, "Player already bet this round");
+
+    // 5. Burn tokens
+    burn_tokens_for_player(contract, &player_account, amount);
+
+    // 6. Create initial hand
+    player.hands = vec![PlayerHand {
+        hand_index: 1,
+        bet_amount: amount,
+        is_finished: false,
+        has_doubled: false,
+        has_split: false,
+        can_hit: true,
+        result: None,
+    }];
+    player.total_burned_this_round = amount;
+    player.burns_tracking = vec![BurnRecord {
+        burn_type: BurnType::Bet,
+        amount,
+        hand_index: 1,
+        timestamp,
+    }];
+    player.last_action_time = timestamp;
+
+    // 7. Update seat
+    contract.seats.insert(&seat_number, &Some(player));
+
+    // 8. Create bet signal
+    let bet_signal = BetSignal {
+        player_account: player_account.clone(),
+        seat_number,
+        amount,
+        burn_type: BurnType::Bet,
+        hand_index: 1,
+        timestamp,
+    };
+
+    let mut pending_bets = contract.pending_bets.get(&seat_number).unwrap_or_default();
     pending_bets.push(bet_signal);
-    contract.pending_bets.insert(&table_id, &pending_bets);
+    contract.pending_bets.insert(&seat_number, &pending_bets);
 
-    // Update table
-    table.last_activity = timestamp;
-    contract.game_tables.insert(&table_id, &table);
+    // 9. Update global state
+    contract.last_activity = timestamp;
 
-    // Emit event
-    contract.emit_event(BlackjackEvent::BetPlaced {
-        table_id: table_id.clone(),
+    // 10. Emit event
+    emit_event(BlackjackEvent::BetPlaced {
         account_id: player_account.clone(),
         amount,
         seat_number,
         timestamp,
     });
 
-    log!("Bet placed: {} burned {} tokens at table {}", 
-        player_account, amount, table_id);
-
+    log!("Player {} placed bet of {} at seat {}", player_account, amount, seat_number);
     true
 }
 
-// ========================================
-// MOVE SIGNALING (Player Actions)
-// ========================================
-
-/// Signal a move (hit, stand, double, split)
-pub fn signal_move(
-    contract: &mut CardsContract, 
-    table_id: String, 
-    move_type: PlayerMove, 
-    hand_index: Option<u8>
-) -> bool {
+/// Signal a move 
+pub fn signal_move(contract: &mut CardsContract, move_type: PlayerMove, hand_index: u8) -> bool {
     let player_account = env::predecessor_account_id();
     let timestamp = env::block_timestamp();
 
-    // 1. Validate table exists and is in player turn state
-    let mut table = match contract.game_tables.get(&table_id) {
-        Some(t) => t,
+    // 1. Find player's seat
+    let seat_number = match crate::game::player::is_player_seated(contract, &player_account) {
+        Some(seat) => seat,
         None => {
-            log!("Table {} not found", table_id);
+            log!("Player {} not seated", player_account);
             return false;
         }
     };
 
-    require!(table.state == GameState::PlayerTurn, "Not in player turn state");
-    require!(table.is_active, "Table is not active");
+    // 2. Validate game state
+    require!(contract.game_state == GameState::PlayerTurn, "Not player turn");
 
-    // 2. Find player and validate it's their turn
-    let player_index = table.players.iter().position(|p| p.account_id == player_account);
-    let player_index = match player_index {
-        Some(idx) => idx,
-        None => {
-            log!("Player {} not found at table {}", player_account, table_id);
+    // 3. Check if it's this player's turn
+    require!(contract.current_player_seat == Some(seat_number), "Not your turn");
+
+    // 4. Get and validate player
+    let mut player = match contract.seats.get(&seat_number) {
+        Some(Some(p)) => p,
+        _ => {
+            log!("Player not found at seat {}", seat_number);
             return false;
         }
     };
 
-    // Check if it's this player's turn
-    let current_player_index = table.current_player_index
-        .expect("No current player set") as usize;
-    require!(player_index == current_player_index, "Not your turn");
+    // 5. Validate hand index
+    require!(hand_index >= 1 && hand_index <= 2, "Invalid hand index (must be 1 or 2)");
+    require!(hand_index == player.current_hand_index, "Must play current hand index");
 
-    let player = &mut table.players[player_index];
-    require!(player.state == PlayerState::Active, "Player not active");
+    let hand_idx = (hand_index - 1) as usize;
+    require!(hand_idx < player.hands.len(), "Hand does not exist");
+    require!(!player.hands[hand_idx].is_finished, "Hand is already finished");
 
-    // 3. Validate move (basic validation - detailed validation in backend)
+    // 6. Process move
     match move_type {
+        PlayerMove::Hit => {
+            require!(player.hands[hand_idx].can_hit, "Cannot hit on this hand");
+        }
+        PlayerMove::Stand => {
+            let hand = &mut player.hands[hand_idx];
+            hand.is_finished = true;
+            hand.can_hit = false;
+        }
         PlayerMove::Double => {
-            // For double, player needs sufficient tokens for second bet
+            require!(!player.hands[hand_idx].has_doubled, "Cannot double twice on same hand");
+            require!(player.hands[hand_idx].can_hit, "Cannot double on finished hand");
+            
+            let double_amount = player.hands[hand_idx].bet_amount;
             require!(
-                contract.has_sufficient_balance(&player_account, player.burned_tokens),
+                crate::tokens::get_balance(contract, &player_account) >= double_amount,
                 "Insufficient tokens for double"
             );
+            
+            burn_tokens_for_player(contract, &player_account, double_amount);
+            
+            let hand = &mut player.hands[hand_idx];
+            hand.has_doubled = true;
+            hand.is_finished = true;
+            hand.can_hit = false;
+            hand.bet_amount += double_amount;
+            
+            player.total_burned_this_round += double_amount;
+            player.burns_tracking.push(BurnRecord {
+                burn_type: BurnType::Double,
+                amount: double_amount,
+                hand_index,
+                timestamp,
+            });
         }
-        _ => {} // Hit, Stand, Split validated in backend with card context
+        PlayerMove::Split => {
+            require!(hand_index == 1, "Can only split on hand 1");
+            require!(!player.hands[hand_idx].has_split, "Cannot split twice");
+            require!(player.hands.len() == 1, "Cannot split when already have multiple hands");
+            
+            let split_amount = player.hands[hand_idx].bet_amount;
+            require!(
+                crate::tokens::get_balance(contract, &player_account) >= split_amount,
+                "Insufficient tokens for split"
+            );
+            
+            burn_tokens_for_player(contract, &player_account, split_amount);
+            
+            player.hands[hand_idx].has_split = true;
+            
+            let hand2 = PlayerHand {
+                hand_index: 2,
+                bet_amount: split_amount,
+                is_finished: false,
+                has_doubled: false,
+                has_split: false,
+                can_hit: true,
+                result: None,
+            };
+            player.hands.push(hand2);
+            
+            player.current_hand_index = 2;
+            player.total_burned_this_round += split_amount;
+            player.burns_tracking.push(BurnRecord {
+                burn_type: BurnType::Split,
+                amount: split_amount,
+                hand_index: 2,
+                timestamp,
+            });
+        }
     }
 
-    // 4. Special handling for double (burn additional tokens immediately)
-    if move_type == PlayerMove::Double {
-        let double_amount = player.burned_tokens;
-        
-        // Burn additional tokens
-        let mut user_account = contract.accounts.get(&player_account)
-            .expect("User account not found");
-        
-        user_account.balance -= double_amount;
-        user_account.total_burned += double_amount;
-        contract.accounts.insert(&player_account, &user_account);
-
-        // Update contract stats
-        contract.total_supply = contract.total_supply.saturating_sub(double_amount);
-        contract.total_cards_burned += double_amount;
-        contract.blackjack_stats.total_tokens_burned_betting += double_amount;
-
-        // Update player
-        player.burned_tokens += double_amount; // Now 2x original bet
-        player.total_burned_this_session += double_amount;
+    // 7. Handle hand completion logic
+    if player.hands[hand_idx].is_finished {
+        if hand_index == 2 && player.hands.len() > 1 && !player.hands[0].is_finished {
+            player.current_hand_index = 1;
+        }
     }
 
-    // 5. Update player state
-    player.pending_move = Some(move_type.clone());
+    // 8. Update seat
     player.last_action_time = timestamp;
+    contract.seats.insert(&seat_number, &Some(player));
 
-    // 6. Create move signal for backend processing
+    // 9. Create move signal
     let move_signal = MoveSignal {
         player_account: player_account.clone(),
-        table_id: table_id.clone(),
+        seat_number,
         move_type: move_type.clone(),
-        timestamp,
         hand_index,
+        timestamp,
     };
 
-    // Add to pending moves
-    let mut pending_moves = contract.pending_moves.get(&table_id).unwrap_or_default();
+    let mut pending_moves = contract.pending_moves.get(&seat_number).unwrap_or_default();
     pending_moves.push(move_signal);
-    contract.pending_moves.insert(&table_id, &pending_moves);
+    contract.pending_moves.insert(&seat_number, &pending_moves);
 
-    // 7. Update table
-    table.last_activity = timestamp;
-    contract.game_tables.insert(&table_id, &table);
+    // 10. Update global state
+    contract.last_activity = timestamp;
 
-    // 8. Emit event
-    contract.emit_event(BlackjackEvent::MoveSignaled {
-        table_id: table_id.clone(),
+    // 11. Emit event
+    emit_event(BlackjackEvent::MoveSignaled {
         account_id: player_account.clone(),
         move_type,
         timestamp,
     });
 
-    log!("Move signaled: {} used {:?} at table {}", 
-        player_account, move_type, table_id);
-
+    log!("Player {} made move {:?} on hand {} at seat {}", player_account, move_type, hand_index, seat_number);
     true
 }
 
-// ========================================
-// WINNINGS DISTRIBUTION (Token Minting)
-// ========================================
-
-/// Distribute winnings by minting tokens (admin only - called by backend)
+/// Distribute winnings by minting tokens (admin only)
 pub fn distribute_winnings(
     contract: &mut CardsContract, 
     distribution: WinningsDistribution
 ) -> bool {
     let timestamp = env::block_timestamp();
-    let table_id = &distribution.table_id;
 
-    // 1. Validate table exists
-    let mut table = match contract.game_tables.get(table_id) {
-        Some(t) => t,
-        None => {
-            log!("Table {} not found for winnings distribution", table_id);
-            return false;
-        }
-    };
-
-    // 2. Update table round number (safety check)
+    // 1. Update round number (safety check)
     require!(
-        distribution.round_number >= table.round_number,
+        distribution.round_number >= contract.round_number,
         "Cannot distribute winnings for past rounds"
     );
 
-    // 3. Process each player's winnings
+    // 2. Process each player's winnings
     let mut total_minted = 0u128;
     
     for winning in &distribution.distributions {
@@ -276,123 +308,54 @@ pub fn distribute_winnings(
         }
     }
 
-    // 4. Update contract stats
+    // 3. Update contract stats
     contract.total_supply += total_minted;
     contract.blackjack_stats.total_winnings_distributed += total_minted;
     contract.blackjack_stats.total_hands_dealt += distribution.distributions.len() as u64;
 
-    // 5. Reset players for next round
-    for player in &mut table.players {
-        player.burned_tokens = 0;
-        player.pending_move = None;
-        player.last_action_time = timestamp;
-        
-        // Set state based on whether they want to continue
-        if player.state == PlayerState::Active {
-            player.state = PlayerState::Active; // Ready for next round
+    // 4. Reset all players for next round
+    for seat in 1..=3 {
+        if let Some(Some(mut player)) = contract.seats.get(&seat) {
+            // Reset to clean state for next round
+            player.current_hand_index = 1;
+            player.hands.clear();
+            player.total_burned_this_round = 0;
+            player.burns_tracking.clear();
+            player.last_action_time = timestamp;
+            player.rounds_played += 1;
+            
+            // Keep player active if they want to continue
+            if player.state == PlayerState::Active {
+                player.state = PlayerState::Active; // Ready for next round
+            }
+            
+            contract.seats.insert(&seat, &Some(player));
         }
     }
 
-    // 6. Update table state
-    table.round_number += 1;
-    table.last_activity = timestamp;
-    table.state = GameState::RoundEnded; // Backend will advance to Betting or WaitingForPlayers
-    contract.game_tables.insert(table_id, &table);
+    // 5. Update global game state
+    contract.round_number += 1;
+    contract.last_activity = timestamp;
+    contract.game_state = GameState::WaitingForPlayers; // Ready for next round
+    contract.current_player_seat = None;
 
-    // 7. Auto-clear all signals since round is complete
-    contract.pending_bets.insert(table_id, &Vec::new());
-    contract.pending_moves.insert(table_id, &Vec::new());
+    // 6. Auto-clear all signals since round is complete 
+    for seat_number in 1..=3 {
+        contract.pending_bets.insert(&seat_number, &Vec::new());
+        contract.pending_moves.insert(&seat_number, &Vec::new());
+    }
 
-    // 8. Emit event
-    contract.emit_event(BlackjackEvent::WinningsDistributed {
-        table_id: table_id.clone(),
+    // 7. Emit event
+    emit_event(BlackjackEvent::WinningsDistributed {
         round_number: distribution.round_number,
         total_minted,
         players_count: distribution.distributions.len() as u8,
         timestamp,
     });
 
-    log!("Winnings distribution completed: {} tokens minted across {} players at table {}", 
-        total_minted, distribution.distributions.len(), table_id);
-    log!("Auto-cleared all pending signals for table {} after round completion", table_id);
+    log!("Winnings distribution completed: {} tokens minted across {} players", 
+        total_minted, distribution.distributions.len());
+    log!("Round {} ended, game reset to WaitingForPlayers state", distribution.round_number);
 
     true
-}
-
-// ========================================
-// HELPER FUNCTIONS
-// ========================================
-
-/// Check if all players at table have placed bets
-pub fn all_bets_placed(contract: &CardsContract, table_id: &String) -> bool {
-    if let Some(table) = contract.game_tables.get(table_id) {
-        let active_players: Vec<_> = table.players.iter()
-            .filter(|p| p.state == PlayerState::Active)
-            .collect();
-
-        if active_players.is_empty() {
-            return false;
-        }
-
-        active_players.iter().all(|p| p.burned_tokens > 0)
-    } else {
-        false
-    }
-}
-
-/// Get total pot (all burned tokens) for a table
-pub fn get_table_pot(contract: &CardsContract, table_id: &String) -> u128 {
-    contract.game_tables.get(table_id)
-        .map(|table| {
-            table.players.iter()
-                .map(|p| p.burned_tokens)
-                .sum()
-        })
-        .unwrap_or(0)
-}
-
-/// Check if player can make a specific move (basic validation)
-pub fn can_make_move(
-    contract: &CardsContract, 
-    table_id: &String, 
-    player_account: &near_sdk::AccountId,
-    move_type: &PlayerMove
-) -> Result<(), GameError> {
-    let table = contract.game_tables.get(table_id)
-        .ok_or(GameError::TableNotFound)?;
-
-    if table.state != GameState::PlayerTurn {
-        return Err(GameError::InvalidGameState);
-    }
-
-    let player = table.players.iter()
-        .find(|p| p.account_id == *player_account)
-        .ok_or(GameError::PlayerNotFound)?;
-
-    if player.state != PlayerState::Active {
-        return Err(GameError::InvalidGameState);
-    }
-
-    // Check if it's player's turn
-    let current_index = table.current_player_index
-        .ok_or(GameError::InvalidGameState)? as usize;
-    let player_index = table.players.iter()
-        .position(|p| p.account_id == *player_account)
-        .ok_or(GameError::PlayerNotFound)?;
-
-    if current_index != player_index {
-        return Err(GameError::NotPlayerTurn);
-    }
-
-    // Move-specific validation
-    match move_type {
-        PlayerMove::Double => {
-            if !contract.has_sufficient_balance(player_account, player.burned_tokens) {
-                return Err(GameError::InsufficientTokens);
-            }
-        }
-        _ => {} // Other moves validated in backend with card context
-    }
-
-    Ok(())
 }
