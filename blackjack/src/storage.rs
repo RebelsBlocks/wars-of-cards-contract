@@ -61,49 +61,16 @@ pub fn calculate_blackjack_player_storage_cost(account_id: &AccountId) -> NearTo
     NearToken::from_yoctonear(cost_with_margin)
 }
 
-/// Calculate storage cost for GameTable
-pub fn calculate_game_table_storage_cost(table_id: &str, max_players: u8) -> NearToken {
-    // Estimate bytes for GameTable struct:
-    let table_id_bytes = table_id.len() as u128;
-    let state_bytes = 4u128; // GameState enum
-    let players_bytes = (max_players as u128) * 200u128; // Estimated bytes per player
-    let current_player_index_bytes = 2u128; // Option<u8>
-    let round_number_bytes = 8u128; // u64
-    let created_at_bytes = 8u128; // u64
-    let last_activity_bytes = 8u128; // u64
-    let betting_deadline_bytes = 9u128; // Option<u64>
-    let move_deadline_bytes = 9u128; // Option<u64>
-    let max_players_bytes = 1u128; // u8
-    let min_bet_bytes = 16u128; // u128
-    let max_bet_bytes = 16u128; // u128
-    let is_active_bytes = 1u128; // bool
-    let borsh_overhead = 64u128; // Borsh serialization overhead
-    let map_entry_overhead = 128u128; // UnorderedMap entry overhead
-    
-    let total_bytes = table_id_bytes + state_bytes + players_bytes + 
-                     current_player_index_bytes + round_number_bytes + created_at_bytes +
-                     last_activity_bytes + betting_deadline_bytes + move_deadline_bytes +
-                     max_players_bytes + min_bet_bytes + max_bet_bytes + is_active_bytes +
-                     borsh_overhead + map_entry_overhead;
-    
-    let cost_yocto = total_bytes * STORAGE_COST_PER_BYTE;
-    
-    // Add 30% safety margin for game complexity
-    let cost_with_margin = cost_yocto * 130 / 100;
-    
-    NearToken::from_yoctonear(cost_with_margin)
-}
 
 /// Calculate storage cost for pending signals (bets/moves)
-pub fn calculate_signals_storage_cost(table_id: &str, max_signals: u16) -> NearToken {
+pub fn calculate_signals_storage_cost(max_signals: u16) -> NearToken {
     // Estimate bytes for Vec<BetSignal> or Vec<MoveSignal>:
-    let table_id_bytes = table_id.len() as u128;
     let signal_size_bytes = 128u128; // Estimated bytes per signal
     let signals_bytes = (max_signals as u128) * signal_size_bytes;
     let vec_overhead = 24u128; // Vec overhead
     let map_entry_overhead = 64u128; // LookupMap entry overhead
     
-    let total_bytes = table_id_bytes + signals_bytes + vec_overhead + map_entry_overhead;
+    let total_bytes = signals_bytes + vec_overhead + map_entry_overhead;
     
     let cost_yocto = total_bytes * STORAGE_COST_PER_BYTE;
     
@@ -113,18 +80,6 @@ pub fn calculate_signals_storage_cost(table_id: &str, max_signals: u16) -> NearT
     NearToken::from_yoctonear(cost_with_margin)
 }
 
-/// Estimate total storage cost for creating a game table
-pub fn estimate_table_creation_cost(table_id: &str, max_players: u8, max_signals_per_type: u16) -> NearToken {
-    let table_cost = calculate_game_table_storage_cost(table_id, max_players);
-    let bet_signals_cost = calculate_signals_storage_cost(table_id, max_signals_per_type);
-    let move_signals_cost = calculate_signals_storage_cost(table_id, max_signals_per_type);
-    
-    let total_yocto = table_cost.as_yoctonear() + 
-                     bet_signals_cost.as_yoctonear() + 
-                     move_signals_cost.as_yoctonear();
-    
-    NearToken::from_yoctonear(total_yocto)
-}
 
 /// Check if user has sufficient storage for blackjack operations
 pub fn has_sufficient_blackjack_storage(
@@ -171,17 +126,6 @@ mod tests {
         println!("Player storage cost: {} NEAR", player_cost.as_near());
     }
 
-    #[test]
-    fn test_table_storage_calculation() {
-        let table_cost = calculate_game_table_storage_cost("table-123", 3);
-        let signals_cost = calculate_signals_storage_cost("table-123", 50);
-        
-        assert!(table_cost.as_yoctonear() > 0);
-        assert!(signals_cost.as_yoctonear() > 0);
-        
-        println!("Table storage cost: {} NEAR", table_cost.as_near());
-        println!("Signals storage cost: {} NEAR", signals_cost.as_near());
-    }
 
     #[test]
     fn test_storage_sufficiency() {
