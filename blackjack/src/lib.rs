@@ -7,6 +7,24 @@ use near_sdk::{
 };
 use schemars::JsonSchema;
 
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(crate = "near_sdk::serde")]
+pub struct ContractMetadata {
+    pub version: String,
+    pub link: Option<String>,
+    pub build_info: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(crate = "near_sdk::serde")]
+pub struct GameStateView {
+    pub state: GameState,
+    pub round_number: u64,
+    pub current_player_seat: Option<u8>,
+    pub available_seats: Vec<u8>,
+    pub occupied_seats: Vec<u8>,
+}
+
 // Import modules
 mod tokens;
 mod storage;
@@ -24,7 +42,7 @@ pub use game::*;
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct CardsContract {
     // ========================================
-    // TOKEN SYSTEM (existing functionality)
+    // TOKEN SYSTEM 
     // ========================================
     /// Total supply of cards ever created
     pub total_supply: u128,
@@ -42,19 +60,26 @@ pub struct CardsContract {
     pub config: ContractConfig,
     
     // ========================================
-    // BLACKJACK SYSTEM (new functionality)
+    // BLACKJACK SYSTEM (Seat-Based)
     // ========================================
-    /// Active game tables (table_id -> GameTable)
-    pub game_tables: UnorderedMap<String, GameTable>,
-    /// Player signals pending backend processing (table_id -> Vec<signals>)
-    pub pending_bets: LookupMap<String, Vec<BetSignal>>,
-    pub pending_moves: LookupMap<String, Vec<MoveSignal>>,
+    /// Fixed 3 seats (1, 2, 3) - None means empty, Some means occupied
+    pub seats: LookupMap<u8, Option<SeatPlayer>>,
+    /// Player signals pending backend processing (seat_number -> Vec<signals>)
+    pub pending_bets: LookupMap<u8, Vec<BetSignal>>,
+    pub pending_moves: LookupMap<u8, Vec<MoveSignal>>,
+    /// Global game state
+    pub game_state: GameState,
+    /// Current round number
+    pub round_number: u64,
+    /// Current player turn (seat number)
+    pub current_player_seat: Option<u8>,
+    /// Game creation time
+    pub game_created_at: u64,
+    pub last_activity: u64,
     /// Game configuration
     pub game_config: GameConfig,
     /// Statistics for blackjack
     pub blackjack_stats: BlackjackStats,
-    /// Current nonce for generating unique table IDs
-    pub table_id_nonce: u64,
     
     // ========================================
     // SHARED
@@ -79,7 +104,6 @@ pub struct BlackjackStats {
     pub total_hands_dealt: u64,
     pub total_tokens_burned_betting: u128,
     pub total_winnings_distributed: u128,
-    pub active_tables: u32,
     pub total_players_joined: u64,
 }
 
@@ -90,7 +114,6 @@ impl Default for BlackjackStats {
             total_hands_dealt: 0,
             total_tokens_burned_betting: 0,
             total_winnings_distributed: 0,
-            active_tables: 0,
             total_players_joined: 0,
         }
     }
@@ -113,16 +136,20 @@ impl CardsContract {
             total_cards_purchased: 0,
             total_cards_burned: 0,
             accounts: UnorderedMap::new(b"a"),
-            storage_deposits: UnorderedMap::new(b"s"),
+            storage_deposits: UnorderedMap::new(b"d"),
             config: ContractConfig::default(),
             
-            // Blackjack system
-            game_tables: UnorderedMap::new(b"t"),
+            // Blackjack system (Pure Seat-Based)
+            seats: LookupMap::new(b"s"),
             pending_bets: LookupMap::new(b"p"),
             pending_moves: LookupMap::new(b"m"),
+            game_state: GameState::WaitingForPlayers,
+            round_number: 0,
+            current_player_seat: None,
+            game_created_at: env::block_timestamp(),
+            last_activity: env::block_timestamp(),
             game_config: GameConfig::default(),
             blackjack_stats: BlackjackStats::default(),
-            table_id_nonce: 0,
             
             // Shared
             owner_id: owner_id.clone(),
@@ -135,7 +162,7 @@ impl CardsContract {
     }
 
     // ========================================
-    // TOKEN FUNCTIONS (delegate to tokens module)
+    // TOKEN FUNCTIONS
     // ========================================
     
     /// Deposit storage for user account
@@ -160,36 +187,20 @@ impl CardsContract {
         tokens::storage_balance_bounds(self)
     }
 
-    /// Get exact storage cost for a specific account
-    pub fn get_storage_cost_for_account(&self, account_id: &AccountId) -> NearToken {
-        tokens::get_storage_cost_for_account(self, account_id)
-    }
 
     /// Claim daily cards
-    pub fn claim_daily_cards(&mut self) -> u128 {
+    pub fn claim(&mut self) -> u128 {
         self.assert_not_paused();
         tokens::claim_daily_cards(self)
     }
 
     /// Purchase cards with NEAR
     #[payable]
-    pub fn purchase_cards(&mut self, tier_index: u8) -> u128 {
+    pub fn purchase(&mut self, tier_index: u8) -> u128 {
         self.assert_not_paused();
         tokens::purchase_cards(self, tier_index)
     }
 
-    /// Burn cards (used for betting)
-    pub fn burn_cards(&mut self, amount: u128) {
-        self.assert_not_paused();
-        
-        let account_id = env::predecessor_account_id();
-        require!(
-            crate::tokens::has_sufficient_storage(self, &account_id),
-            "Storage deposit required. Call storage_deposit() first."
-        );
-        
-        tokens::burn_cards(self, amount)
-    }
 
     /// Check if user can claim cards (gas-free)
     pub fn check_claim_eligibility(&self, account_id: &AccountId) -> ClaimEligibility {
@@ -227,45 +238,41 @@ impl CardsContract {
     }
 
     /// Get contract configuration
-    pub fn get_config(&self) -> &ContractConfig {
+    pub fn get_token_config(&self) -> &ContractConfig {
         tokens::get_config(self)
     }
 
     /// Update contract configuration (Owner only)
-    pub fn update_config(&mut self, update: AdminConfigUpdate) {
+    pub fn update_token_config(&mut self, update: AdminConfigUpdate) {
         tokens::update_config(self, update)
     }
 
     // ========================================
-    // BLACKJACK FUNCTIONS
+    // BLACKJACK FUNCTIONS 
     // ========================================
 
-    /// Create a new game table
-    pub fn create_game_table(&mut self, table_id: Option<String>) -> String {
-        game::table::create_table(self, table_id)
-    }
-
-    /// Join a game table at specific seat
-    pub fn join_game_table(&mut self, table_id: String, seat_number: u8) -> bool {
+    /// Take a seat (1, 2, or 3)
+    pub fn take_seat(&mut self, seat_number: u8) -> bool {
         self.assert_not_paused();
-        game::player::join_table(self, table_id, seat_number)
+        game::player::take_seat(self, seat_number)
     }
 
-    /// Leave a game table
-    pub fn leave_game_table(&mut self, table_id: String) -> bool {
-        game::player::leave_table(self, table_id)
+    /// Leave your current seat
+    pub fn leave_seat(&mut self) -> bool {
+        self.assert_not_paused();
+        game::player::leave_seat(self)
     }
 
     /// Place a bet (burns tokens)
-    pub fn place_bet(&mut self, table_id: String, amount: u128) -> bool {
+    pub fn bet(&mut self, amount: u128) -> bool {
         self.assert_not_paused();
-        game::action::place_bet(self, table_id, amount)
+        game::action::place_bet(self, amount)
     }
 
     /// Signal a move (hit, stand, double, split)
-    pub fn signal_move(&mut self, table_id: String, move_type: PlayerMove, hand_index: Option<u8>) -> bool {
+    pub fn make_move(&mut self, move_type: PlayerMove, hand_index: u8) -> bool {
         self.assert_not_paused();
-        game::action::signal_move(self, table_id, move_type, hand_index)
+        game::action::signal_move(self, move_type, hand_index)
     }
 
     /// Distribute winnings (admin/backend only)
@@ -275,39 +282,58 @@ impl CardsContract {
     }
 
     /// Advance game state (backend trigger)
-    pub fn advance_game_state(&mut self, table_id: String, new_state: GameState) -> bool {
+    pub fn game_mode(&mut self, new_state: GameState) -> bool {
         self.assert_admin();
-        game::admin::advance_game_state(self, table_id, new_state)
+        game::admin::advance_game_state(self, new_state)
     }
 
     // ========================================
-    // VIEW FUNCTIONS (Blackjack)
+    // VIEW FUNCTIONS 
     // ========================================
 
-    /// Get game table information
-    pub fn get_game_table(&self, table_id: &String) -> Option<GameTableView> {
-        game::table::get_table_view(self, table_id)
+    /// Get current game state and seat information
+    pub fn get_game_state(&self) -> GameStateView {
+        GameStateView {
+            state: self.game_state.clone(),
+            round_number: self.round_number,
+            current_player_seat: self.current_player_seat,
+            available_seats: self.get_available_seats(),
+            occupied_seats: self.get_occupied_seats(),
+        }
     }
 
-    /// Get all active tables
-    pub fn get_active_tables(&self) -> Vec<GameTableView> {
-        game::table::get_active_tables(self)
+    /// Get player information for a specific seat
+    pub fn get_seat_player(&self, seat_number: u8) -> Option<PlayerView> {
+        if seat_number < 1 || seat_number > 3 {
+            return None;
+        }
+        self.seats.get(&seat_number).flatten().map(|player| {
+            PlayerView {
+                account_id: player.account_id.clone(),
+                seat_number: player.seat_number,
+                state: player.state.clone(),
+                current_hand_index: player.current_hand_index,
+                hands: player.hands.clone(),
+                total_burned_this_round: player.total_burned_this_round,
+                time_since_last_action: (env::block_timestamp() - player.last_action_time) / 1_000_000_000,
+                is_current_player: self.current_player_seat == Some(seat_number),
+            }
+        })
+    }
+
+    /// Get all occupied seats
+    pub fn get_all_players(&self) -> Vec<PlayerView> {
+        (1..=3).filter_map(|seat| self.get_seat_player(seat)).collect()
     }
 
     /// Get pending bet signals (for backend polling)
-    pub fn get_pending_bets(&self, table_id: &String) -> Vec<BetSignal> {
-        self.pending_bets.get(table_id).unwrap_or_default()
+    pub fn get_bets_signals(&self, seat_number: u8) -> Vec<BetSignal> {
+        self.pending_bets.get(&seat_number).unwrap_or_default()
     }
 
     /// Get pending move signals (for backend polling)
-    pub fn get_pending_moves(&self, table_id: &String) -> Vec<MoveSignal> {
-        self.pending_moves.get(table_id).unwrap_or_default()
-    }
-
-    /// Clear processed signals (backend calls after processing)
-    pub fn clear_processed_signals(&mut self, table_id: String, bet_count: u8, move_count: u8) {
-        self.assert_admin();
-        game::admin::clear_signals(self, table_id, bet_count, move_count)
+    pub fn get_moves_signals(&self, seat_number: u8) -> Vec<MoveSignal> {
+        self.pending_moves.get(&seat_number).unwrap_or_default()
     }
 
     /// Get blackjack statistics
@@ -315,119 +341,43 @@ impl CardsContract {
         &self.blackjack_stats
     }
 
-    /// Find available table with open seats
-    pub fn find_available_table(&self) -> Option<GameTableView> {
-        game::table::find_available_table(self)
+    /// Get available seats (1, 2, 3)
+    pub fn get_available_seats(&self) -> Vec<u8> {
+        (1..=3).filter(|&seat| self.seats.get(&seat).is_none()).collect()
+    }
+
+    /// Get occupied seats
+    pub fn get_occupied_seats(&self) -> Vec<u8> {
+        (1..=3).filter(|&seat| self.seats.get(&seat).is_some()).collect()
     }
 
     // ========================================
     // ADMIN FUNCTIONS
     // ========================================
 
-    /// Add game admin
-    pub fn add_game_admin(&mut self, account_id: AccountId) {
-        self.assert_owner();
-        self.game_admins.insert(&account_id, &true);
-        log!("Added game admin: {}", account_id);
-    }
-
-    /// Remove game admin
-    pub fn remove_game_admin(&mut self, account_id: &AccountId) {
-        self.assert_owner();
-        self.game_admins.remove(account_id);
-        log!("Removed game admin: {}", account_id);
-    }
-
-    /// Update game configuration
-    pub fn update_game_config(&mut self, config: GameConfig) {
-        self.assert_admin();
-        self.game_config = config;
-        log!("Game configuration updated by {}", env::predecessor_account_id());
-    }
-
-    /// Close a game table (emergency)
-    pub fn close_table(&mut self, table_id: String, reason: String) {
-        self.assert_admin();
-        game::admin::close_table(self, table_id, reason)
-    }
 
     /// Kick specific player by account ID (admin only)
-    /// For when player times out or needs to be removed
     pub fn kick_player_by_account(&mut self, account_id: AccountId, reason: String) -> bool {
         self.assert_admin();
-        
-        // Find the single table (since you only have one)
-        let table_id = self.get_single_table_id();
-        
-        match table_id {
-            Some(id) => game::admin::kick_player(self, id, account_id, reason),
-            None => {
-                log!("No tables found for kicking player {}", account_id);
-                false
-            }
-        }
-    }
-    
-    /// Clear all pending signals (emergency cleanup)
-    pub fn clear_all_pending_signals(&mut self, table_id: String) {
-        self.assert_admin();
-        
-        let bet_count = self.pending_bets.get(&table_id).map_or(0, |v| v.len()) as u8;
-        let move_count = self.pending_moves.get(&table_id).map_or(0, |v| v.len()) as u8;
-        
-        // Clear all signals
-        self.pending_bets.insert(&table_id, &Vec::new());
-        self.pending_moves.insert(&table_id, &Vec::new());
-        
-        log!("Admin cleared {} bet signals and {} move signals", bet_count, move_count);
-        
-        self.emit_event(BlackjackEvent::SignalsCleared {
-            table_id,
-            bet_signals_cleared: bet_count,
-            move_signals_cleared: move_count,
-            timestamp: env::block_timestamp(),
-        });
-    }
-    
-    /// Force end round and refund all bets (emergency)
-    pub fn emergency_end_round_with_refunds(&mut self, table_id: String, reason: String) -> u8 {
-        self.assert_admin();
-        
-        let refunded = game::admin::emergency_refund_table(self, table_id.clone());
-        
-        self.emit_event(BlackjackEvent::EmergencyRefund {
-            table_id,
-            reason,
-            players_refunded: refunded,
-            timestamp: env::block_timestamp(),
-        });
-        
-        refunded
-    }
-    
-    /// Get single table ID (helper since you only have one table)
-    pub fn get_single_table_id(&self) -> Option<String> {
-        self.game_tables.keys().next()
+        game::admin::kick_player(self, account_id, reason)
     }
     
     /// Auto-clear processed signals after round completion
     /// Called by backend after each round
-    pub fn cleanup_round_signals(&mut self, table_id: String, round_number: u64) {
+    pub fn cleanup_round_signals(&mut self, seat_number: u8, round_number: u64) {
         self.assert_admin();
         
         // Verify this is for current/completed round
-        if let Some(table) = self.game_tables.get(&table_id) {
-            require!(
-                round_number >= table.round_number, 
-                "Cannot clear signals for future rounds"
-            );
-            
-            // Clear all signals since round is complete
-            self.pending_bets.insert(&table_id, &Vec::new());
-            self.pending_moves.insert(&table_id, &Vec::new());
-            
-            log!("Cleaned up signals for completed round {}", round_number);
-        }
+        require!(
+            round_number >= self.round_number, 
+            "Cannot clear signals for future rounds"
+        );
+        
+        // Clear signals for specific seat since round is complete
+        self.pending_bets.insert(&seat_number, &Vec::new());
+        self.pending_moves.insert(&seat_number, &Vec::new());
+        
+        log!("Cleaned up signals for seat {} after round {}", seat_number, round_number);
     }
     
     /// Global pause for contract upgrades (owner only)
@@ -436,11 +386,6 @@ impl CardsContract {
         
         self.is_globally_paused = Some(true);
         self.pause_reason = Some(reason.clone());
-        
-        // Pause the single table
-        if let Some(table_id) = self.get_single_table_id() {
-            game::admin::set_table_active(self, table_id, false);
-        }
         
         self.emit_event(BlackjackEvent::GlobalPause {
             reason: reason.clone(),
@@ -456,11 +401,6 @@ impl CardsContract {
         
         self.is_globally_paused = Some(false);
         self.pause_reason = None;
-        
-        // Resume the single table
-        if let Some(table_id) = self.get_single_table_id() {
-            game::admin::set_table_active(self, table_id, true);
-        }
         
         self.emit_event(BlackjackEvent::GlobalResume {
             timestamp: env::block_timestamp(),
@@ -500,80 +440,21 @@ impl CardsContract {
         self.get_balance(account_id) >= amount
     }
 
-    /// Generate unique table ID
-    pub fn generate_table_id(&mut self) -> String {
-        self.table_id_nonce += 1;
-        format!("table-{}", self.table_id_nonce)
-    }
 
     /// Emit event for logging (internal only)
     fn emit_event<T: Serialize>(&self, event: T) {
         events::emit_event(event)
     }
 
-    // ========================================
-    // ENHANCED UTILITY FUNCTIONS
-    // ========================================
-
-
-    /// Enhanced validation for all operations (internal only)
-    fn validate_user_operation(&self, account_id: &AccountId, required_tokens: Option<u128>) -> bool {
-        // Check storage
-        if !crate::tokens::has_sufficient_storage(self, account_id) {
-            return false;
+    /// Get contract metadata
+    pub fn get_contract_metadata(&self) -> ContractMetadata {
+        ContractMetadata {
+            version: "0.1.3".to_string(),
+            link: Some("https://warsofcards.online/".to_string()),
+            build_info: Some("Rebels Blocks".to_string()),
         }
-
-        // Check balance if required
-        if let Some(required) = required_tokens {
-            if self.get_balance(account_id) < required {
-                return false;
-            }
-        }
-
-        // Check if user exists
-        if self.accounts.get(account_id).is_none() {
-            return false;
-        }
-
-        true
     }
 
-    /// Batch operation for gas efficiency
-    pub fn batch_burn_cards(&mut self, burns: Vec<(AccountId, u128)>) -> Vec<bool> {
-        let mut results = Vec::new();
-        
-        for (account_id, amount) in burns {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                // Validate
-                if !self.validate_user_operation(&account_id, Some(amount)) {
-                    return false;
-                }
-
-                if !self.config.valid_burn_amounts.contains(&amount) {
-                    return false;
-                }
-
-                // Execute burn
-                if let Some(mut user) = self.accounts.get(&account_id) {
-                    if user.balance >= amount {
-                        user.balance -= amount;
-                        user.total_burned += amount;
-                        
-                        self.total_supply = self.total_supply.saturating_sub(amount);
-                        self.total_cards_burned += amount;
-                        
-                        self.accounts.insert(&account_id, &user);
-                        return true;
-                    }
-                }
-                false
-            }));
-
-            results.push(result.unwrap_or(false));
-        }
-        
-        results
-    }
 }
 
 // ========================================
@@ -644,24 +525,19 @@ mod tests {
         context.attached_deposit = NearToken::from_near(0);
         testing_env!(context.clone());
         
-        let claimed = contract.claim_daily_cards();
+        let claimed = contract.claim();
         assert_eq!(claimed, 1000);
         assert_eq!(contract.get_balance(&accounts(1)), 1000);
         
-        // 4. Create game table ✅
-        let table_id = contract.create_game_table(Some("test-table".to_string()));
-        assert_eq!(table_id, "test-table");
-        
-        // 5. Join table ✅
-        let joined = contract.join_game_table(table_id.clone(), 1);
+        // 4. Take seat ✅
+        let joined = contract.take_seat(1);
         assert!(joined);
         
-        // 6. Check game state ✅
-        let table_view = contract.get_game_table(&table_id).unwrap();
-        assert_eq!(table_view.state, GameState::WaitingForPlayers);
-        assert_eq!(table_view.players.len(), 1);
-        assert_eq!(table_view.players[0].account_id, accounts(1));
-        assert_eq!(table_view.players[0].seat_number, 1);
+        // 5. Check game state ✅
+        let game_state = contract.get_game_state();
+        assert_eq!(game_state.state, GameState::WaitingForPlayers);
+        assert_eq!(game_state.occupied_seats, vec![1]);
+        assert_eq!(game_state.available_seats, vec![2, 3]);
         
         // 7. Check contract stats ✅
         let stats = contract.get_contract_stats();
@@ -685,7 +561,7 @@ mod tests {
         
         context.attached_deposit = NearToken::from_near(0);
         testing_env!(context.clone());
-        contract.claim_daily_cards(); // Get 1000 tokens
+        contract.claim(); // Get 1000 tokens
         
         // Player 2 setup
         context.predecessor_account_id = accounts(2);
@@ -695,27 +571,24 @@ mod tests {
         
         context.attached_deposit = NearToken::from_near(0);
         testing_env!(context.clone());
-        contract.claim_daily_cards(); // Get 1000 tokens
+        contract.claim(); // Get 1000 tokens
         
-        // Create table and both players join
-        let table_id = contract.create_game_table(Some("multi-player".to_string()));
-        
-        // Player 1 joins
+        // Player 1 takes seat
         context.predecessor_account_id = accounts(1);
         testing_env!(context.clone());
-        let joined1 = contract.join_game_table(table_id.clone(), 1);
+        let joined1 = contract.take_seat(1);
         assert!(joined1);
         
-        // Player 2 joins
+        // Player 2 takes seat
         context.predecessor_account_id = accounts(2);
         testing_env!(context.clone());
-        let joined2 = contract.join_game_table(table_id.clone(), 2);
+        let joined2 = contract.take_seat(2);
         assert!(joined2);
         
-        // Check table state
-        let table_view = contract.get_game_table(&table_id).unwrap();
-        assert_eq!(table_view.players.len(), 2);
-        assert_eq!(table_view.available_seats, vec![3]); // Only seat 3 left
+        // Check game state
+        let game_state = contract.get_game_state();
+        assert_eq!(game_state.occupied_seats, vec![1, 2]);
+        assert_eq!(game_state.available_seats, vec![3]); // Only seat 3 left
         
         // Check contract stats
         let stats = contract.get_contract_stats();
@@ -738,16 +611,15 @@ mod tests {
         contract.storage_deposit(Some(accounts(1)));
         context.attached_deposit = NearToken::from_near(0);
         testing_env!(context.clone());
-        contract.claim_daily_cards();
+        contract.claim();
         
-        // Create and join table
-        let table_id = contract.create_game_table(Some("betting-test".to_string()));
-        contract.join_game_table(table_id.clone(), 1);
+        // Take seat
+        contract.take_seat(1);
         
-        // Set table to betting state (as admin)
+        // Set game to betting state (as admin)
         context.predecessor_account_id = accounts(0);
         testing_env!(context.clone());
-        contract.advance_game_state(table_id.clone(), GameState::Betting);
+        contract.game_mode(GameState::Betting);
         
         // Test different bet amounts
         context.predecessor_account_id = accounts(1);
@@ -757,7 +629,7 @@ mod tests {
         let initial_supply = contract.total_supply;
         
         // Small bet
-        let bet_placed = contract.place_bet(table_id.clone(), 10);
+        let bet_placed = contract.bet(10);
         assert!(bet_placed);
         
         // Verify token burning
@@ -767,13 +639,17 @@ mod tests {
         assert_eq!(contract.blackjack_stats.total_tokens_burned_betting, 10);
         
         // Verify player state
-        let table_view = contract.get_game_table(&table_id).unwrap();
-        assert_eq!(table_view.players[0].burned_tokens, 10);
+        let player_view = contract.get_seat_player(1).unwrap();
+        assert_eq!(player_view.total_burned_this_round, 10);
+        assert_eq!(player_view.hands.len(), 1);
+        assert_eq!(player_view.hands[0].bet_amount, 10);
+        assert_eq!(player_view.hands[0].hand_index, 1);
         
-        // Check pending bet signals
-        let pending_bets = contract.get_pending_bets(&table_id);
+        // Check pending bet signals (seat-based)
+        let pending_bets = contract.get_bets_signals(1); // seat 1
         assert_eq!(pending_bets.len(), 1);
         assert_eq!(pending_bets[0].amount, 10);
+        assert_eq!(pending_bets[0].seat_number, 1);
     }
 
     #[test]  
@@ -788,23 +664,22 @@ mod tests {
         contract.storage_deposit(Some(accounts(1)));
         context.attached_deposit = NearToken::from_near(0);
         testing_env!(context.clone());
-        contract.claim_daily_cards();
+        contract.claim();
         
-        // Create game scenario
-        let table_id = contract.create_game_table(Some("full-game".to_string()));
-        contract.join_game_table(table_id.clone(), 1);
+        // Take seat
+        contract.take_seat(1);
         
         // Start betting phase (as admin)
         context.predecessor_account_id = accounts(0);
         testing_env!(context.clone());
-        contract.advance_game_state(table_id.clone(), GameState::Betting);
+        contract.game_mode(GameState::Betting);
         
         // Player bets
         context.predecessor_account_id = accounts(1);
         testing_env!(context.clone());
         
         let balance_before_bet = contract.get_balance(&accounts(1));
-        contract.place_bet(table_id.clone(), 50);
+        contract.bet(50);
         assert_eq!(contract.get_balance(&accounts(1)), balance_before_bet - 50);
         
         // Admin distributes winnings (player wins double)
@@ -812,7 +687,6 @@ mod tests {
         testing_env!(context);
         
         let distribution = WinningsDistribution {
-            table_id: table_id.clone(),
             round_number: 1,
             distributions: vec![
                 PlayerWinning {
@@ -845,9 +719,9 @@ mod tests {
         assert_eq!(blackjack_stats.total_winnings_distributed, 100);
         assert_eq!(blackjack_stats.total_hands_dealt, 1);
         
-        // Verify signals were cleared
-        assert_eq!(contract.get_pending_bets(&table_id).len(), 0);
-        assert_eq!(contract.get_pending_moves(&table_id).len(), 0);
+        // Verify signals were cleared (seat-based)
+        assert_eq!(contract.get_bets_signals(1).len(), 0);
+        assert_eq!(contract.get_moves_signals(1).len(), 0);
     }
 
     #[test]
@@ -858,21 +732,12 @@ mod tests {
         
         let mut contract = CardsContract::new(accounts(0));
         
-        // Add game admin
-        contract.add_game_admin(accounts(1));
-        assert!(contract.game_admins.get(&accounts(1)).unwrap_or(false));
-        
-        // Admin creates table
-        context.predecessor_account_id = accounts(1);
-        testing_env!(context.clone());
-        let table_id = contract.create_game_table(Some("admin-table".to_string()));
-        
         // Admin controls game state
-        let advanced = contract.advance_game_state(table_id.clone(), GameState::Betting);
+        let advanced = contract.game_mode(GameState::Betting);
         assert!(advanced);
         
-        let table_view = contract.get_game_table(&table_id).unwrap();
-        assert_eq!(table_view.state, GameState::Betting);
+        let game_state = contract.get_game_state();
+        assert_eq!(game_state.state, GameState::Betting);
         
         // Owner can pause globally
         context.predecessor_account_id = accounts(0);
@@ -919,7 +784,7 @@ mod tests {
             testing_env!(context.clone());
             
             let initial_balance = contract.get_balance(&accounts(1));
-            let purchased = contract.purchase_cards(tier_index as u8);
+            let purchased = contract.purchase(tier_index as u8);
             
             assert_eq!(purchased, tier.cards_amount);
             assert_eq!(contract.get_balance(&accounts(1)), initial_balance + tier.cards_amount);
@@ -930,7 +795,7 @@ mod tests {
         testing_env!(context);
         
         let result = std::panic::catch_unwind(|| {
-            contract.purchase_cards(99) // Invalid tier
+            contract.purchase(99) // Invalid tier
         });
         assert!(result.is_err());
     }
@@ -945,28 +810,19 @@ mod tests {
         
         // Test operations without storage deposit
         let result = std::panic::catch_unwind(|| {
-            contract.claim_daily_cards()
+            contract.claim()
         });
         assert!(result.is_err()); // Should fail - no storage
         
-        let result = std::panic::catch_unwind(|| {
-            contract.burn_cards(10)
-        });
-        assert!(result.is_err()); // Should fail - no storage
-        
-        // Test game operations on non-existent table
-        let bet_placed = contract.place_bet("fake-table".to_string(), 50);
+        // Test game operations without taking seat first
+        let bet_placed = contract.bet(50);
         assert!(!bet_placed); // Should return false, not panic
         
-        let joined = contract.join_game_table("fake-table".to_string(), 1);
+        let joined = contract.take_seat(0); // Invalid seat
         assert!(!joined); // Should return false, not panic
         
         // Test invalid seat numbers
-        let table_id = contract.create_game_table(None);
-        let joined = contract.join_game_table(table_id, 0); // Invalid seat
-        assert!(!joined);
-        
-        let joined = contract.join_game_table(table_id, 4); // Invalid seat
+        let joined = contract.take_seat(4); // Invalid seat
         assert!(!joined);
     }
 
