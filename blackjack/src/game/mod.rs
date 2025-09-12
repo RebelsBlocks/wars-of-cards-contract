@@ -2,7 +2,6 @@
 
 pub mod types;
 pub mod player;
-pub mod table; 
 pub mod action;
 pub mod admin;
 
