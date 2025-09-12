@@ -4,7 +4,7 @@ use near_sdk::{AccountId, NearToken};
 pub const STORAGE_COST_PER_BYTE: u128 = 10_000_000_000_000_000_000; // 1e19 yoctoNEAR per byte
 
 // For typical account names (20-30 chars), storage cost will be ~0.002-0.003 NEAR
-pub const STORAGE_DEPOSIT_REQUIRED: u128 = 3_000_000_000_000_000_000_000; // ~0.003 NEAR minimum
+pub const STORAGE_DEPOSIT_REQUIRED: u128 = 12_300_000_000_000_000_000_000; // 0.0123 NEAR minimum
 
 /// Helper function to calculate storage cost for a UserAccount
 pub fn calculate_user_storage_cost(account_id: &AccountId) -> NearToken {
@@ -32,24 +32,25 @@ pub fn calculate_user_storage_cost(account_id: &AccountId) -> NearToken {
     NearToken::from_yoctonear(cost_with_margin)
 }
 
-/// Calculate storage cost for BlackjackPlayer
+/// Calculate storage cost for SeatPlayer
 pub fn calculate_blackjack_player_storage_cost(account_id: &AccountId) -> NearToken {
-    // Estimate bytes for BlackjackPlayer struct:
+    // Estimate bytes for SeatPlayer struct:
     let account_id_bytes = account_id.as_str().len() as u128;
     let seat_number_bytes = 1u128; // u8
     let state_bytes = 4u128; // PlayerState enum
-    let burned_tokens_bytes = 16u128; // u128
+    let current_hand_index_bytes = 1u128; // u8
+    let hands_bytes = 200u128; // Vec<PlayerHand> - estimated for max 2 hands
+    let total_burned_this_round_bytes = 16u128; // u128
+    let burns_tracking_bytes = 300u128; // Vec<BurnRecord> - estimated
     let joined_at_bytes = 8u128; // u64
     let last_action_time_bytes = 8u128; // u64
-    let pending_move_bytes = 8u128; // Option<PlayerMove>
-    let total_burned_session_bytes = 16u128; // u128
     let rounds_played_bytes = 4u128; // u32
     let borsh_overhead = 32u128; // Borsh serialization overhead
     let vec_entry_overhead = 32u128; // Vec entry overhead
     
     let total_bytes = account_id_bytes + seat_number_bytes + state_bytes + 
-                     burned_tokens_bytes + joined_at_bytes + last_action_time_bytes +
-                     pending_move_bytes + total_burned_session_bytes + rounds_played_bytes +
+                     current_hand_index_bytes + hands_bytes + total_burned_this_round_bytes +
+                     burns_tracking_bytes + joined_at_bytes + last_action_time_bytes + rounds_played_bytes +
                      borsh_overhead + vec_entry_overhead;
     
     let cost_yocto = total_bytes * STORAGE_COST_PER_BYTE;
