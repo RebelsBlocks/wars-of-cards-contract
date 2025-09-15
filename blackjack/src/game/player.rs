@@ -17,13 +17,19 @@ pub fn take_seat(contract: &mut CardsContract, seat_number: u8) -> bool {
         return false;
     }
 
-    // 2. Check if seat is available
+    // 2. Check if joining is allowed in current game state
+    if contract.game_state != GameState::WaitingForPlayers {
+        log_error("Cannot join seat", "Can only join seats during WaitingForPlayers state", Some(player_account.clone()));
+        return false;
+    }
+
+    // 3. Check if seat is available
     if contract.seats.get(&seat_number).is_some() {
         log_error("Seat occupied", &format!("Seat {}", seat_number), Some(player_account.clone()));
         return false;
     }
 
-    // 3. Check if player is already seated somewhere
+    // 4. Check if player is already seated somewhere
     for seat in 1..=3 {
         if let Some(Some(existing_player)) = contract.seats.get(&seat) {
             if existing_player.account_id == player_account {
@@ -33,7 +39,7 @@ pub fn take_seat(contract: &mut CardsContract, seat_number: u8) -> bool {
         }
     }
 
-    // 4. Check storage
+    // 5. Check storage
     if !crate::storage::has_sufficient_blackjack_storage(
         contract.storage_deposits.get(&player_account).unwrap_or(near_sdk::NearToken::from_near(0)),
         &player_account
@@ -42,7 +48,7 @@ pub fn take_seat(contract: &mut CardsContract, seat_number: u8) -> bool {
         return false;
     }
 
-    // 5. Create seat player
+    // 6. Create seat player
     let seat_player = SeatPlayer {
         account_id: player_account.clone(),
         seat_number,
@@ -60,12 +66,12 @@ pub fn take_seat(contract: &mut CardsContract, seat_number: u8) -> bool {
         rounds_played: 0,
     };
 
-    // 6. Place player in seat
+    // 7. Place player in seat
     contract.seats.insert(&seat_number, &Some(seat_player));
     contract.last_activity = timestamp;
     contract.blackjack_stats.total_players_joined += 1;
 
-    // 7. Emit event
+    // 8. Emit event
     emit_event(BlackjackEvent::PlayerJoined {
         account_id: player_account.clone(),
         seat_number,
@@ -120,8 +126,8 @@ pub fn leave_seat(contract: &mut CardsContract) -> bool {
         contract.current_player_seat = find_next_active_player(contract, seat_number);
     }
 
-    // 4. Remove player from seat
-    contract.seats.insert(&seat_number, &None);
+    // 4. Remove player from seat (clear the entry entirely)
+    contract.seats.remove(&seat_number);
     contract.last_activity = timestamp;
 
     // 5. Clear pending signals for this seat
