@@ -39,18 +39,16 @@ pub fn advance_game_state(contract: &mut CardsContract, new_state: GameState) ->
             contract.current_player_seat = None;
         }
 
-        GameState::PlayerTurn => {
-            // Find first active player with bet
-            let first_player_seat = (1..=3)
-                .find(|&seat| {
-                    contract.seats.get(&seat)
-                        .flatten()
-                        .map(|p| p.state == PlayerState::Active && p.total_burned_this_round > 0)
-                        .unwrap_or(false)
-                })
-                .map(|seat| seat);
+        GameState::Seat1Turn => {
+            contract.current_player_seat = Some(1);
+        }
 
-            contract.current_player_seat = first_player_seat;
+        GameState::Seat2Turn => {
+            contract.current_player_seat = Some(2);
+        }
+
+        GameState::Seat3Turn => {
+            contract.current_player_seat = Some(3);
         }
 
         GameState::DealerTurn => {
@@ -114,8 +112,8 @@ pub fn kick_player(contract: &mut CardsContract, account_id: AccountId, reason: 
         contract.current_player_seat = crate::game::player::find_next_active_player(contract, seat_number);
     }
 
-    // Remove player
-    contract.seats.insert(&seat_number, &None);
+    // Remove player (clear the entry entirely)
+    contract.seats.remove(&seat_number);
     contract.last_activity = timestamp;
 
     // Clear signals
