@@ -15,7 +15,9 @@ pub enum GameState {
     WaitingForPlayers,
     Betting,
     DealingInitialCards,
-    PlayerTurn,
+    Seat1Turn,
+    Seat2Turn,
+    Seat3Turn,
     DealerTurn,
 }
 
