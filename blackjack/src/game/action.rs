@@ -141,10 +141,19 @@ pub fn signal_move(contract: &mut CardsContract, move_type: PlayerMove, hand_ind
         }
     };
 
-    // 2. Validate game state
-    require!(contract.game_state == GameState::PlayerTurn, "Not player turn");
+    // 2. Validate game state - must be the specific seat's turn
+    let expected_state = match seat_number {
+        1 => GameState::Seat1Turn,
+        2 => GameState::Seat2Turn,
+        3 => GameState::Seat3Turn,
+        _ => {
+            log!("Invalid seat number for turn validation: {}", seat_number);
+            return false;
+        }
+    };
+    require!(contract.game_state == expected_state, "Not your turn");
 
-    // 3. Check if it's this player's turn
+    // 3. Check if it's this player's turn (redundant but kept for safety)
     require!(contract.current_player_seat == Some(seat_number), "Not your turn");
 
     // 4. Get and validate player
